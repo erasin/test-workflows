@@ -76,7 +76,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bins-${{ matrix.archive_name }}
+          name: bins-${{ matrix.build }}
           path: dist
 
   create-release:
