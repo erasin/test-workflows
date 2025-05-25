@@ -57,7 +57,7 @@ jobs:
           target: ${{ matrix.target }}
 
       - name: Cargo build
-        run: cargo build --profile opt --locked --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Build archive
         shell: bash
@@ -68,9 +68,9 @@ jobs:
           echo "name: ${{ env.BIN_NAME }}";
 
           if [ "${{ matrix.os }}" = "windows-2019" ]; then
-            cp "target/${{ matrix.target }}/opt/${{ env.BIN_NAME }}.exe" "dist/"
+            cp "target/${{ matrix.target }}/release/${{ env.BIN_NAME }}.exe" "dist/"
           else
-            cp "target/${{ matrix.target }}/opt/${{ env.BIN_NAME }}" "dist/"
+            cp "target/${{ matrix.target }}/release/${{ env.BIN_NAME }}" "dist/"
           fi
 
       - name: Upload artifact
