@@ -1,75 +1,168 @@
-name: Build
+name: Release
+
 on:
-  pull_request:
   push:
+    tags:
+    - '[0-9]+.[0-9]+'
+    - '[0-9]+.[0-9]+.[0-9]+'
     branches:
-      - main
-  merge_group:
+    - ci-release-*
 
 jobs:
-  check:
-    name: Check (msrv)
-    runs-on: ubuntu-latest
-    if: github.repository == 'erasin/hx-lsp'
-    steps:
-      - name: Checkout sources
-        uses: actions/checkout@v4
-        with:
-          profile: minimal
-          override: true
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "build"
-
-      - name: Run cargo check
-        run: cargo check
-
-  test:
-    name: Test Suite
+  build:
+    name: Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
-    if: github.repository == 'erasin/hx-lsp'
-    env:
-      RUST_BACKTRACE: 1
-    steps:
-      - name: Checkout sources
-        uses: actions/checkout@v4
-
-      - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Run cargo test
-        run: cargo test 
-
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        build: [x86_64-linux, aarch64-linux, x86_64-macos, aarch64-macos, x86_64-windows]
+        include:
+          - build: x86_64-linux
+            os: ubuntu-24.04
+            rust: stable
+            target: x86_64-unknown-linux-gnu
+            cross: false
+          - build: aarch64-linux
+            os: ubuntu-24.04-arm
+            rust: stable
+            target: aarch64-unknown-linux-gnu
+            cross: false
+          - build: x86_64-macos
+            os: macos-latest
+            rust: stable
+            target: x86_64-apple-darwin
+            cross: false
+          - build: aarch64-macos
+            os: macos-latest
+            rust: stable
+            target: aarch64-apple-darwin
+            cross: false
+            skip_tests: true
+          - build: x86_64-windows
+            os: windows-latest
+            rust: stable
+            target: x86_64-pc-windows-msvc
+            cross: false
 
-  lints:
-    name: Lints
-    runs-on: ubuntu-latest
-    if: github.repository == 'erasin/hx-lsp'
     steps:
       - name: Checkout sources
         uses: actions/checkout@v4
 
-      - name: Install stable toolchain
+      - name: Install ${{ matrix.rust }} toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          toolchain: ${{ matrix.rust }}
+          target: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Cargo build
+        run: cargo build --profile opt --locked --target ${{ matrix.target }}
+
+      - name: Build archive
+        shell: bash
+        run: |
+          mkdir -p dist
+          echo "os: ${{ matrix.os }}";
+          echo "target: ${{ matrix.target }}";
+          echo "name: ${{ matrix.bin_name }}";
+
+          if [ "${{ matrix.os }}" = "windows-2019" ]; then
+            cp "target/${{ matrix.target }}/opt/${{ matrix.bin_name }}.exe" "dist/"
+          else
+            cp "target/${{ matrix.target }}/opt/${{ matrix.bin_name }}" "dist/"
+          fi
+          cp README.md release/
+
+      # # ✅ Windows: use PowerShell Compress-Archive
+      # - name: Package binary on Windows
+      #   if: runner.os == 'Windows'
+      #   shell: pwsh
+      #   run: |
+      #     $archive = "${{ matrix.archive_name }}"
+      #     $binary = "release\${{ matrix.bin_name }}"
+      #     $files = @($binary)
+      #     if (Test-Path -Path "release\README.md")   { $files += "release\README.md" }
+      #     if (Test-Path -Path "release\LICENSE-MIT")     { $files += "release\LICENSE-MIT" }
+      #     Compress-Archive -Path $files -DestinationPath "release\$archive"
+
+      # # ✅ Unix/macOS: use bash + zip/tar
+      # - name: Package binary on Unix
+      #   if: runner.os != 'Windows'
+      #   shell: bash
+      #   run: |
+      #     cd release
+      #     if [[ "${{ matrix.archive_name }}" == *.zip ]]; then
+      #       zip "${{ matrix.archive_name }}" "${{ matrix.bin_name }}" README* LICENSE* 2>/dev/null || zip "${{ matrix.archive_name }}" "${{ matrix.bin_name }}"
+      #     else
+      #       tar -czf "${{ matrix.archive_name }}" "${{ matrix.bin_name }}" README* LICENSE* 2>/dev/null || tar -czf "${{ matrix.archive_name }}" "${{ matrix.bin_name }}"
+      #     fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          shared-key: "build"
+          name: bins-${{ matrix.archive_name }}
+          path: dist
 
-      - name: Run cargo fmt
-        run: cargo fmt --all --check
+  create-release:
+    name: Create Release
+    needs: [build]
+    runs-on: ubuntu-latest
 
-      - name: Run cargo clippy
-        run: cargo clippy --all-targets -- -D warnings
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
 
-      - name: Run cargo doc
-        run: cargo doc --no-deps --document-private-items
-        env:
-          RUSTDOCFLAGS: -D warnings
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
 
+      - name: build archive
+        shell: bash
+        run: |
+          set -ex
+          source="$(pwd)"
+          tag=${GITHUB_REF_NAME//\//}
+  
+          cd "$(mktemp -d)"
+          mv $source/bins-* .
+          mkdir dist
+
+          for dir in bins-* ; do
+              platform=${dir#"bins-"}
+              if [[ $platform =~ "windows" ]]; then
+                  exe=".exe"
+              fi
+              pkgname=helix-$tag-$platform
+              mkdir -p $pkgname
+              cp $source/LICENSE $source/README.md $pkgname
+              mkdir $pkgname/contrib
+              cp -r $source/contrib/completion $pkgname/contrib
+              mv bins-$platform/runtime $pkgname/
+              mv bins-$platform/hx$exe $pkgname
+              chmod +x $pkgname/hx$exe
+
+              if [[ "$platform" = "x86_64-linux" ]]; then
+                  mv bins-$platform/helix-*.AppImage* dist/
+                  mv bins-$platform/*.deb dist/
+              fi
+
+              if [ "$exe" = "" ]; then
+                  tar cJf dist/$pkgname.tar.xz $pkgname
+              else
+                  7z a -r dist/$pkgname.zip $pkgname
+              fi
+          done
+
+          tar cJf dist/test-$tag-source.tar.xz -C $source .
+          mv dist $source/
+
+      - name: create release
+        uses: softprops/action-gh-release@v2
+        if: github.ref_type == 'tag'
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          files: dist/*
+          body_path: ${{ github.workspace }}-CHANGELOG.txt
+          
+      - name: Upload binaries as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: dist/*
