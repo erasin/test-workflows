@@ -11,6 +11,8 @@ on:
 jobs:
   build:
     name: Build (${{ matrix.target }})
+    env:
+      BIN_NAME: test-workflows
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -65,9 +67,9 @@ jobs:
           echo "name: ${{ matrix.bin_name }}";
 
           if [ "${{ matrix.os }}" = "windows-2019" ]; then
-            cp "target/${{ matrix.target }}/opt/${{ matrix.bin_name }}.exe" "dist/"
+            cp "target/${{ matrix.target }}/opt/${{ env.BIN_NAME }}.exe" "dist/"
           else
-            cp "target/${{ matrix.target }}/opt/${{ matrix.bin_name }}" "dist/"
+            cp "target/${{ matrix.target }}/opt/${{ env.BIN_NAME }}" "dist/"
           fi
           cp README.md release/
 
